@@ -69,6 +69,8 @@ function makeCombo(wrapId, choices, onPick) {
   const list = wrap.querySelector(".combo-list");
   const placeholder = wrapId === "addItemWrap" ? "Search items…" : wrapId === "presetWrap" ? "Find a preset…" : "Search compatible enchantments…";
   input.id = wrapId === "addItemWrap" ? "addItemSearch" : wrapId === "presetWrap" ? "presetSearch" : `${wrapId}Search`;
+  list.id = `${input.id}List`;
+  input.setAttribute("aria-controls", list.id);
   input.placeholder = placeholder;
   input.setAttribute("aria-label", placeholder.replace(/[.…]+$/, ""));
   let selected = -1;
