@@ -1,24 +1,28 @@
 <!doctype html><html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Anvil Calc — Minecraft Enchant Optimiser</title>
-<link rel="stylesheet" href="style.css"></head>
+<link rel="stylesheet" href="style.css">
+<link rel="icon" href="item_images/anvil.png"></head>
 <body><div class="wrap">
-<header class="top"><div class="logo">⚒️</div><div>
+<header class="top"><div class="logo">
+<img src="item_images/anvil.png" alt="anvil" width="44" height="44"
+style="image-rendering:pixelated"></div><div>
 <h1>Anvil Calculator</h1>
 <p class="sub">Cheapest anvil order for Minecraft enchants.
 Forked from <a href="https://github.com/aviettran/minecraft-anvil-calc">aviettran/minecraft-anvil-calc</a>,
 rebuilt responsive by Jim.</p></div></header>
 <div class="grid">
-<div><div class="card"><h2>Setup</h2>
-<div class="row"><select id="addItem"></select>
+<div><div class="card"><h2>Setup — type to search</h2>
+<div class="row"><div class="combo-wrap" id="addItemWrap"></div>
 <button class="pri" onclick="addItem()">Add</button></div>
-<div class="row" style="margin-top:8px"><select id="preset"></select>
+<div class="row" style="margin-top:8px"><div class="combo-wrap" id="presetWrap"></div>
 <button onclick="setPreset()">Preset</button></div>
 <div class="checks"><label><input type="checkbox" id="java"
 onchange="state.settings.java_edition=this.checked;render()"> Java Edition</label>
 <label><input type="checkbox" id="multi"
 onchange="state.settings.allow_multiple_armor_enhancements=this.checked;render()">
 Allow multi protection</label></div>
+<div class="qgrid" id="quickGrid"></div>
 </div>
 <div class="card" style="margin-top:14px"><h2>Items</h2><div id="items"></div></div>
 </div>
