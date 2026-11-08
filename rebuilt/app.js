@@ -139,8 +139,6 @@ function render(){
         <label style="font-size:12px;color:var(--dim)">Prior work
         <input type="number" min="0" value="${it.penalty||0}"
           onchange="chPen(${it.index},this.value)" style="width:64px"></label>
-        <select onchange="addEnch(${it.index},this.value)" onfocus="this.dataset.q=''">
-          <option value="">+ enchant (open list, then type first letters + Enter)…</option>${enchOpts}</select>
       </div>
       <div class="combo-wrap-inline" id="ce${it.index}"></div>
       ${it.enchantments.map(e=>`<div class="ench"><span>${eName(e.name)}
