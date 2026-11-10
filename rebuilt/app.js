@@ -1,7 +1,7 @@
 let ITEMS = [], ENCH = [], state = {
   items: [],
   next: 0,
-  settings: { java_edition: false, allow_multiple_armor_enhancements: false }
+  settings: { java_edition: true, allow_multiple_armor_enhancements: false }
 };
 const $ = id => document.getElementById(id);
 const ROMAN = { 1: "I", 2: "II", 3: "III", 4: "IV", 5: "V", 6: "VI", 7: "VII", 8: "VIII", 9: "IX", 10: "X" };
@@ -69,7 +69,20 @@ async function load() {
     makeCombo("addItemWrap", addItemChoices(), value => { addItemVal = value; });
     makeCombo("presetWrap", PRESETS.map(p => ({ value: p[0], label: p[1] })), value => { presetVal = value; });
 
-    const sharedItems = new URLSearchParams(location.search).get("items");
+    const sharedParams = new URLSearchParams(location.search);
+    const sharedSettings = sharedParams.get("settings");
+    if (sharedSettings) {
+      try {
+        const parsedSettings = JSON.parse(sharedSettings);
+        if (parsedSettings && typeof parsedSettings === "object") {
+          state.settings.java_edition = parsedSettings.java_edition !== false;
+          state.settings.allow_multiple_armor_enhancements = parsedSettings.allow_multiple_armor_enhancements === true;
+        }
+      } catch (error) {
+        // Ignore malformed settings and keep the defaults.
+      }
+    }
+    const sharedItems = sharedParams.get("items");
     if (sharedItems) {
       try {
         const parsed = JSON.parse(sharedItems);
@@ -439,6 +452,7 @@ function run() {
   const url = new URL(location.href);
   if (state.items.length) url.searchParams.set("items", JSON.stringify(state.items));
   else url.searchParams.delete("items");
+  url.searchParams.set("settings", JSON.stringify(state.settings));
   history.replaceState(null, "", url);
 
   if (!state.items.length) {
