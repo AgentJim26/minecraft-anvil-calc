@@ -13,6 +13,43 @@ function escapeHtml(value) {
   return String(value).replace(/[&<>"']/g, ch => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[ch]));
 }
 
+// The engine mutates the items it is given, so every calculation gets its own
+// deep copy and the UI keeps a pristine snapshot for rendering.
+function copy(value) {
+  return JSON.parse(JSON.stringify(value));
+}
+
+function normaliseLevel(value) {
+  const numeric = Number(value);
+  return Number.isFinite(numeric) && numeric >= 1 ? numeric : 1;
+}
+
+function normalisePenalty(value) {
+  const numeric = Number(value);
+  return Number.isFinite(numeric) && numeric >= 0 ? numeric : 0;
+}
+
+function normaliseItem(item, index) {
+  return {
+    name: item.name,
+    penalty: normalisePenalty(item.penalty),
+    index,
+    enchantments: Array.isArray(item.enchantments)
+      ? item.enchantments.filter(e => e && typeof e.name === "string").map(e => {
+          const enchantment = { name: e.name, level: normaliseLevel(e.level) };
+          if (e.preserve) enchantment.preserve = true;
+          return enchantment;
+        })
+      : []
+  };
+}
+
+// Reassign compact, unique indexes so every item lookup by index stays stable.
+function reindexItems() {
+  state.items.forEach((item, index) => { item.index = index; });
+  state.next = state.items.length;
+}
+
 function icon(name, sz) {
   const spec = ITEMS.find(i => i.name === name) || {};
   const file = spec.image || (name + ".png");
@@ -37,18 +74,15 @@ async function load() {
       try {
         const parsed = JSON.parse(sharedItems);
         if (Array.isArray(parsed)) {
-          state.items = parsed.filter(item => item && typeof item.name === "string").map((item, index) => ({
-            name: item.name,
-            penalty: Math.max(0, Number(item.penalty) || 0),
-            index: Number.isFinite(Number(item.index)) ? Number(item.index) : index,
-            enchantments: Array.isArray(item.enchantments) ? item.enchantments : []
-          }));
-          state.next = state.items.reduce((next, item) => Math.max(next, item.index + 1), 0);
+          state.items = parsed
+            .filter(item => item && typeof item.name === "string")
+            .map((item, index) => normaliseItem(item, index));
         }
       } catch (error) {
         // Ignore an invalid shared setup and let the user start fresh.
       }
     }
+    reindexItems();
     $("java").checked = state.settings.java_edition;
     $("multi").checked = state.settings.allow_multiple_armor_enhancements;
     render();
@@ -147,7 +181,7 @@ function makeCombo(wrapId, choices, onPick) {
     const hit = event.target.closest(".combo-hit[data-value]");
     if (hit) choose(hit);
   });
-  input.addEventListener("blur", () => setTimeout(close, 120));
+  input.addEventListener("blur", close);
 
   wrap._refresh = () => {
     if (wrapId === "addItemWrap") {
@@ -195,8 +229,10 @@ async function setPreset() {
     const response = await fetch(`data/${encodeURIComponent(value)}_preset.json`);
     if (!response.ok) throw new Error("Preset not found");
     const data = await response.json();
-    state.items = data.map((item, index) => ({ name: item.name, penalty: item.penalty || 0, index, enchantments: item.enchantments || [] }));
-    state.next = state.items.length;
+    state.items = data
+      .filter(item => item && typeof item.name === "string")
+      .map((item, index) => normaliseItem(item, index));
+    reindexItems();
     render();
   } catch (error) {
     $("status").textContent = "That preset could not be loaded. Please try another one.";
@@ -237,7 +273,7 @@ function addEnch(index, value) {
   const item = state.items.find(entry => entry.index === index);
   const spec = ENCH.find(enchantment => enchantment.name === value);
   if (!item || !spec) return;
-  item.enchantments.push({ name: value, level: spec.base_max_level ?? spec.max_level });
+  item.enchantments.push({ name: value, level: normaliseLevel(spec.base_max_level ?? spec.max_level) });
   render();
 }
 
@@ -248,18 +284,50 @@ function delEnch(index, name) {
   render();
 }
 
+// Update the matching input/card without rebuilding the whole item list, so
+// typing a new level never loses focus.
+function syncItemCard(index) {
+  const item = state.items.find(entry => entry.index === index);
+  if (!item) return;
+  const card = document.querySelector(`#items .item[data-item-index="${index}"]`);
+  if (!card) return;
+
+  const pill = card.querySelector(".pill");
+  if (pill) pill.textContent = `Prior work ${item.penalty || 0}`;
+  const penaltyInput = card.querySelector(".penalty-input");
+  if (penaltyInput && penaltyInput !== document.activeElement) penaltyInput.value = item.penalty;
+
+  card.querySelectorAll(".ench").forEach(row => {
+    const enchantment = item.enchantments.find(entry => entry.name === row.dataset.ench);
+    if (!enchantment) return;
+    const small = row.querySelector(".ench-name small");
+    if (small) small.textContent = rn(enchantment.level);
+    const levelInput = row.querySelector("input");
+    // Never rewrite the field the user is currently typing in.
+    if (levelInput && levelInput !== document.activeElement) levelInput.value = enchantment.level;
+  });
+}
+
+function syncItemCards() {
+  document.querySelectorAll("#items .item[data-item-index]").forEach(card => {
+    syncItemCard(Number(card.dataset.itemIndex));
+  });
+}
+
 function chLvl(index, name, value) {
   const item = state.items.find(entry => entry.index === index);
   const enchantment = item && item.enchantments.find(entry => entry.name === name);
   if (!enchantment) return;
-  enchantment.level = Math.max(1, +value || 1);
+  enchantment.level = normaliseLevel(value);
+  syncItemCard(index);
   run();
 }
 
 function chPen(index, value) {
   const item = state.items.find(entry => entry.index === index);
   if (!item) return;
-  item.penalty = Math.max(0, +value || 0);
+  item.penalty = normalisePenalty(value);
+  syncItemCard(index);
   run();
 }
 
@@ -267,6 +335,37 @@ function fmtItem(item) {
   if (!item) return "?";
   const enchantments = (item.enchantments || []).map(enchantment => `${escapeHtml(eName(enchantment.name))} ${rn(enchantment.level)}`).join(", ");
   return `${icon(item.name, 22)} ${escapeHtml(dName(item.name))}${enchantments ? " — " + enchantments : ""}`;
+}
+
+// The engine edits the target enchantments it is merging in place. Those same
+// objects are referenced by the step rows, which made a step's "before" item
+// display the post-merge (higher) level. Replay the merge order against a
+// pristine copy of the setup so every step shows the levels that existed when
+// that step started.
+function stableSteps(steps, sourceItems) {
+  const current = new Map();
+  sourceItems.forEach(item => current.set(item.index, copy(item)));
+  return steps.map(step => {
+    const target = current.get(step.targetItem.index) || copy(step.targetItem);
+    const sacrifice = current.get(step.sacrificeItem.index) || copy(step.sacrificeItem);
+    const display = {
+      ...step,
+      targetItem: copy(target),
+      sacrificeItem: copy(sacrifice)
+    };
+    // Replay this anvil operation on clean copies so the level shown for the
+    // next step follows the engine's bump rule instead of any state the engine
+    // edited while searching earlier candidates.
+    let resulting = step.resultingItem;
+    try {
+      const merged = anvil(withSpecs(copy(target), ENCH), withSpecs(copy(sacrifice), ENCH), state.settings);
+      if (merged && !merged.error) resulting = merged.resultingItem;
+    } catch (error) {
+      // Fall back to the engine's own step result.
+    }
+    current.set(step.resultingItem.index, copy(resulting));
+    return display;
+  });
 }
 
 function render() {
@@ -297,17 +396,35 @@ function render() {
   state.items.forEach(item => {
     const card = document.createElement("article");
     card.className = "item";
+    card.dataset.itemIndex = String(item.index);
     const options = compatList(item);
     card.innerHTML = `<div class="item-h">${icon(item.name, 34)}<strong class="item-title">${escapeHtml(dName(item.name))}</strong><span class="pill">Prior work ${item.penalty || 0}</span><button class="icon-button remove-item" type="button" aria-label="Remove ${escapeHtml(dName(item.name))}" title="Remove item">×</button></div><label class="prior-row">Prior work penalty <input class="penalty-input" type="number" min="0" step="1" value="${Math.max(0, Number(item.penalty) || 0)}" aria-label="Prior work penalty for ${escapeHtml(dName(item.name))}"></label><div class="combo-wrap-inline" id="ce${item.index}"></div><div class="enchantments"></div>`;
     card.querySelector(".remove-item").addEventListener("click", () => delItem(item.index));
-    card.querySelector(".penalty-input").addEventListener("change", event => chPen(item.index, event.target.value));
+
+    const penaltyInput = card.querySelector(".penalty-input");
+    const commitPenalty = event => chPen(item.index, event.target.value);
+    penaltyInput.addEventListener("input", commitPenalty);
+    penaltyInput.addEventListener("change", event => {
+      commitPenalty(event);
+      const entry = state.items.find(entry => entry.index === item.index);
+      event.target.value = entry ? entry.penalty : 0;
+    });
 
     const enchantments = card.querySelector(".enchantments");
     item.enchantments.forEach(enchantment => {
       const row = document.createElement("div");
       row.className = "ench";
+      row.dataset.ench = enchantment.name;
       row.innerHTML = `<span class="ench-name">${escapeHtml(eName(enchantment.name))}<small>${rn(enchantment.level)}</small></span><input type="number" min="1" step="1" value="${Math.max(1, Number(enchantment.level) || 1)}" aria-label="${escapeHtml(eName(enchantment.name))} level"><button class="icon-button" type="button" aria-label="Remove ${escapeHtml(eName(enchantment.name))}" title="Remove enchantment">×</button>`;
-      row.querySelector("input").addEventListener("change", event => chLvl(item.index, enchantment.name, event.target.value));
+      const levelInput = row.querySelector("input");
+      const commitLevel = event => chLvl(item.index, enchantment.name, event.target.value);
+      levelInput.addEventListener("input", commitLevel);
+      levelInput.addEventListener("change", event => {
+        commitLevel(event);
+        const entry = state.items.find(entry => entry.index === item.index);
+        const target = entry && entry.enchantments.find(entry => entry.name === enchantment.name);
+        event.target.value = target ? target.level : 1;
+      });
       row.querySelector("button").addEventListener("click", () => delEnch(item.index, enchantment.name));
       enchantments.appendChild(row);
     });
@@ -317,47 +434,50 @@ function render() {
   run();
 }
 
-let timer = null;
 function run() {
-  clearTimeout(timer);
-  timer = setTimeout(() => {
-    const url = new URL(location.href);
-    if (state.items.length) url.searchParams.set("items", JSON.stringify(state.items));
-    else url.searchParams.delete("items");
-    history.replaceState(null, "", url);
+  syncItemCards();
+  const url = new URL(location.href);
+  if (state.items.length) url.searchParams.set("items", JSON.stringify(state.items));
+  else url.searchParams.delete("items");
+  history.replaceState(null, "", url);
 
-    if (!state.items.length) {
-      $("kCost").textContent = "—";
-      $("kXp").textContent = "—";
-      $("kSteps").textContent = "—";
-      $("steps").innerHTML = `<tr class="steps-empty"><td colspan="4">Add gear or an enchanted book to see your anvil order.</td></tr>`;
-      $("status").textContent = "";
-      return;
-    }
+  if (!state.items.length) {
+    $("kCost").textContent = "—";
+    $("kXp").textContent = "—";
+    $("kSteps").textContent = "—";
+    $("steps").innerHTML = `<tr class="steps-empty"><td colspan="4">Add gear or an enchanted book to see your anvil order.</td></tr>`;
+    $("status").textContent = "";
+    return;
+  }
 
-    $("status").textContent = "Calculating the lowest-cost order…";
-    setTimeout(() => {
-      const result = combineItems(JSON.parse(JSON.stringify(state.items)), state.settings, ENCH);
-      if (result.error) {
-        $("status").textContent = state.items.length < 2
-          ? "Add a second item or an enchanted book to plan an anvil combination."
-          : result.status;
-        $("kCost").textContent = "—";
-        $("kXp").textContent = "—";
-        $("kSteps").textContent = "—";
-        $("steps").innerHTML = `<tr class="steps-empty"><td colspan="4">No valid combination found. Check compatibility and try another setup.</td></tr>`;
-        return;
-      }
-      $("status").textContent = "";
-      $("kCost").textContent = result.cost;
-      const xp = result.steps.reduce((total, step) => total + levelToXP(step.stepCost), 0);
-      $("kXp").textContent = Math.round(xp).toLocaleString();
-      $("kSteps").textContent = result.steps.length;
-      $("steps").innerHTML = result.steps.map((step, index) =>
-        `<tr><td class="step-n">${index + 1}</td><td>${fmtItem(step.targetItem)}</td><td>+ ${fmtItem(step.sacrificeItem)}</td><td><b>${step.stepCost}</b><br><small>${Math.round(levelToXP(step.stepCost)).toLocaleString()} XP</small></td></tr>`
-      ).join("");
-    }, 30);
-  }, 120);
+  // Snapshot before the engine runs: combineItems edits its input.
+  const snapshot = copy(state.items);
+  let result;
+  try {
+    result = combineItems(copy(snapshot), state.settings, ENCH);
+  } catch (error) {
+    result = { error: true, status: "No valid combination found. Check compatibility and try another setup." };
+  }
+
+  if (result.error) {
+    $("status").textContent = state.items.length < 2
+      ? "Add a second item or an enchanted book to plan an anvil combination."
+      : result.status;
+    $("kCost").textContent = "—";
+    $("kXp").textContent = "—";
+    $("kSteps").textContent = "—";
+    $("steps").innerHTML = `<tr class="steps-empty"><td colspan="4">No valid combination found. Check compatibility and try another setup.</td></tr>`;
+    return;
+  }
+
+  $("status").textContent = "";
+  $("kCost").textContent = result.cost;
+  const xp = result.steps.reduce((total, step) => total + levelToXP(step.stepCost), 0);
+  $("kXp").textContent = Math.round(xp).toLocaleString();
+  $("kSteps").textContent = result.steps.length;
+  $("steps").innerHTML = stableSteps(result.steps, snapshot).map((step, index) =>
+    `<tr><td class="step-n">${index + 1}</td><td>${fmtItem(step.targetItem)}</td><td>+ ${fmtItem(step.sacrificeItem)}</td><td><b>${step.stepCost}</b><br><small>${Math.round(levelToXP(step.stepCost)).toLocaleString()} XP</small></td></tr>`
+  ).join("");
 }
 
 load();
